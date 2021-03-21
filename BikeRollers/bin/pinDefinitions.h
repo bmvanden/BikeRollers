@@ -1,11 +1,20 @@
-#define RESISTOR_FWD				'B', 0
 #define LOW							0
 #define	HIGH						1
 #define TOGGLE						2
 #define INPUT						3
 #define OUTPUT						4
 
-#define RESISTOR_FWD				'B', 0
+#define RESISTOR_FWD				'D', 1
+#define RESISTOR_REV				'D', 0
+#define RESISTOR_PWM				'B', 1
+#define RESISTOR_DUTY_CYCLE			OCR1A	// 0-255
+
+#define MOTOR_FWD					'B', 0
+#define MOTOR_REV					'D', 4
+#define MOTOR_PWM					'B', 2
+#define MOTOR_DUTY_CYCLE			OCR1B	// 0-255
+
+/*#define RESISTOR_FWD				'B', 0
 #define RESISTOR_REV				'D', 4
 #define RESISTOR_PWM				'B', 2
 #define RESISTOR_DUTY_CYCLE			OCR1B	// 0-255
@@ -13,7 +22,7 @@
 #define MOTOR_FWD					'D', 1
 #define MOTOR_REV					'D', 0
 #define MOTOR_PWM					'B', 1
-#define MOTOR_DUTY_CYCLE			OCR1A	// 0-255
+#define MOTOR_DUTY_CYCLE			OCR1A	// 0-255*/
 
 #define BATT_V_REF					'C', 4
 #define BATT_TEMP					'C', 2

@@ -20,11 +20,22 @@ void setAnalogInputs();
 void setSampleTimer();
 void updateMotorPID();
 void updateResistorPID();
+void updateAnalogInputs();
 
 void sampleInputs();
 
 uint8_t testSampling;
 uint8_t iEncoderPos;
+
+// Analog inputs
+uint8_t currentADC;
+uint8_t potSlope_steps;
+uint8_t potFriction_steps;
+uint8_t	potMomentum_steps;
+uint8_t battTemp_steps;
+uint8_t battVoltageRef_steps;
+uint8_t motorCurrent_steps;	// 128 should be 0 current
+uint8_t controllerTemp_steps;
 
 #warning "Get temperature of controller from ADC8"
 
@@ -54,21 +65,13 @@ int main(void)
 	setPwmTimers();
 	setAnalogInputs();
 	setSampleTimer();
-	sei();
-	
-	OCR1A = 200;
-	OCR1B = 50;		
+	sei();	
 	
     while(1)
     {
+		updateAnalogInputs();
 		
-		if (!(ADCSRA & (1 << ADSC))) {
-			// ADC conversion not running
-			ADMUX = ADMUX & 0b11110000 | 0b00000001; // Need to increment after sampling to change ADC inputs
-			ADCSRA |= (1 << ADSC); // Start conversion again
-		}
-		
-		digitalWrite(RESISTOR_REV, HIGH);
+		digitalWrite(MOTOR_REV, HIGH);
 		
 		//Turn on PD5 if PD4 is true
 		/*if (digitalRead(SW_AUTO_MAN)) {
@@ -78,7 +81,7 @@ int main(void)
 		};
 		_delay_ms(1000);*/
 		
-		OCR1B = ADCH;
+		RESISTOR_DUTY_CYCLE = motorCurrent_steps;
 		
 		/* Functions:
 			- Scan analog inputs 
@@ -165,9 +168,51 @@ void updateMotorPID(){
 		}
 	}*/
 	
-	OCR1A = iEncoderPos;
+	MOTOR_DUTY_CYCLE = potFriction_steps;
 }
 
 void updateResistorPID(){
 	
+}
+
+void updateAnalogInputs(){
+	if (!(ADCSRA & (1 << ADSC))) {
+		// ADC conversion not running, start new conversion
+		switch (currentADC){
+			case 0:
+				potSlope_steps = ADCH;
+				currentADC = 1;
+				break;
+			case 1:
+				potFriction_steps = ADCH;
+				currentADC = 2;
+				break;
+			case 2:
+				battTemp_steps = ADCH;
+				currentADC = 3;
+				break;
+			case 3:
+				motorCurrent_steps = ADCH;
+				currentADC = 4;
+				break;
+			case 4:
+				battVoltageRef_steps = ADCH;
+				currentADC = 7;
+				break;
+			case 7:
+				potMomentum_steps = ADCH;
+				currentADC = 8;
+				break;
+			case 8:
+				controllerTemp_steps = ADCH;
+				currentADC = 0;
+				break;
+			default:
+				currentADC = 0;
+				break;
+		}
+			
+		ADMUX = ADMUX & 0b11110000 | currentADC; // Set ADC channel to scan
+		ADCSRA |= (1 << ADSC); // Start conversion again
+	}	
 }
