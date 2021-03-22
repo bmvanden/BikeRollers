@@ -25,7 +25,7 @@ void updateAnalogInputs();
 void sampleInputs();
 
 uint8_t testSampling;
-uint8_t iEncoderPos;
+int16_t iEncoderPos;
 
 // Analog inputs
 uint8_t currentADC;
@@ -37,11 +37,26 @@ uint8_t battVoltageRef_steps;
 uint8_t motorCurrent_steps;	// 128 should be 0 current
 uint8_t controllerTemp_steps;
 
+#define MOTOR_DATA_LENGTH			25
+typedef struct{
+	float motorInstVelocity;
+	float motorVelocity;
+	float motorAcceleration;
+} MotorData;
+MotorData arrMotorData[MOTOR_DATA_LENGTH];
+uint8_t motorDataPointer;
+uint8_t dataBufferFull;
+
+uint8_t targetCurrent_steps;
+void getTargetCurrent();
+float motorVoltageControl;
+
 #warning "Get temperature of controller from ADC8"
 
 ISR (TIMER2_OVF_vect) {
 	TCNT2 = 99;	// 100 Hz sampling	
 	sampleInputs();
+	getTargetCurrent();	
 	updateMotorPID();
 	updateResistorPID();
 }
@@ -56,11 +71,6 @@ ISR (INT0_vect) {
 
 int main(void)
 {
-	/* Setup:
-		- Configure PWM outputs for motor and resistor
-		- Configure watchdog for cycle reset
-		- Set I/O pins
-	*/
 	setPinModes();
 	setPwmTimers();
 	setAnalogInputs();
@@ -69,18 +79,7 @@ int main(void)
 	
     while(1)
     {
-		updateAnalogInputs();
-		
-		digitalWrite(MOTOR_REV, HIGH);
-		
-		//Turn on PD5 if PD4 is true
-		/*if (digitalRead(SW_AUTO_MAN)) {
-			digitalWrite(EXT_STATUS_LT, TOGGLE);
-		} else {	
-			digitalWrite(EXT_STATUS_LT, LOW);
-		};
-		_delay_ms(1000);*/
-		
+		updateAnalogInputs();		
 		RESISTOR_DUTY_CYCLE = motorCurrent_steps;
 		
 		/* Functions:
@@ -153,26 +152,93 @@ void setSampleTimer(){
 }
 
 void sampleInputs(){
-	// Update array with encoder position
+	arrMotorData[motorDataPointer].motorInstVelocity = iEncoderPos / 0.01;
+	iEncoderPos = 0;
+	
+	arrMotorData[motorDataPointer].motorVelocity = 0;
+	for (uint8_t i = 0; i < MOTOR_DATA_LENGTH; i++) {
+		arrMotorData[motorDataPointer].motorVelocity += arrMotorData[motorDataPointer].motorInstVelocity;
+	}
+	arrMotorData[motorDataPointer].motorVelocity /= MOTOR_DATA_LENGTH;
+	
+	if (motorDataPointer < (MOTOR_DATA_LENGTH - 1)) {
+		arrMotorData[motorDataPointer].motorAcceleration =
+				(arrMotorData[motorDataPointer].motorVelocity - arrMotorData[motorDataPointer + 1].motorVelocity)
+				/ MOTOR_DATA_LENGTH;				
+	} else {
+		arrMotorData[motorDataPointer].motorAcceleration =
+				(arrMotorData[motorDataPointer].motorVelocity - arrMotorData[0].motorVelocity)
+				/ MOTOR_DATA_LENGTH;		
+	}
+	
+	if (!dataBufferFull) {
+		arrMotorData[motorDataPointer].motorVelocity = 0;
+		arrMotorData[motorDataPointer].motorAcceleration = 0;
+	}
+	
+	motorDataPointer += 1;
+	if (motorDataPointer >= MOTOR_DATA_LENGTH) {
+		dataBufferFull = true;
+		motorDataPointer = 0;
+	}
+}
+
+void getTargetCurrent(){
+	float targetCurrent = 128;
+	
+	// Friction (responds to square of velocity)
+	/*targetCurrent -= arrMotorData[motorDataPointer].motorVelocity 
+			* arrMotorData[motorDataPointer].motorVelocity * potFriction_steps / 1280*/
+	
+	// Slope (fixed torque)
+	targetCurrent += (potSlope_steps - 128) / 4;
+	
+	// Momentum (responds to change in velocity)
+	//targetCurrent -= arrMotorData[motorDataPointer].motorAcceleration * potMomentum_steps / 255;
+	
+	// Check boundaries
+	if (targetCurrent < 0 || arrMotorData[motorDataPointer].motorVelocity == 0) { // don't apply torque if rollers are stationary
+		targetCurrent_steps = 128;
+	} else if (targetCurrent > 255) {
+		targetCurrent_steps = 255;
+	} else {
+		targetCurrent_steps = targetCurrent;
+	}
 }
 
 void updateMotorPID(){
-	/*testSampling += 1;
-	if (testSampling >= 100){
-		testSampling = 0;
-		
-		if (OCR1A < 128) {
-			OCR1A = 192;
-			} else {
-			OCR1A = 64;
-		}
-	}*/
+	float error = targetCurrent_steps - motorCurrent_steps;
+	error *= 0.05;
 	
-	MOTOR_DUTY_CYCLE = potFriction_steps;
+	motorVoltageControl += error;	
+	if (motorVoltageControl < -127) {
+		motorVoltageControl = -127;
+	} else if (motorVoltageControl > 127) {
+		motorVoltageControl = 127;
+	} 
+	
+	// FOR DEBUGGING*****
+	motorVoltageControl = targetCurrent_steps - 128;
+	// ******************
+	
+	if (motorVoltageControl < 0) {
+		MOTOR_DUTY_CYCLE = -motorVoltageControl;
+		digitalWrite(MOTOR_REV, 1);
+		digitalWrite(MOTOR_FWD, 0);
+	} else if (motorVoltageControl > 0) {
+		MOTOR_DUTY_CYCLE = motorVoltageControl;
+		digitalWrite(MOTOR_REV, 0);
+		digitalWrite(MOTOR_FWD, 1);
+	} else {
+		MOTOR_DUTY_CYCLE = 0;
+		digitalWrite(MOTOR_REV, 0);
+		digitalWrite(MOTOR_FWD, 0);
+	}
 }
 
 void updateResistorPID(){
-	
+	#warning "Write resistor PID and test resistor outputs"
+	RESISTOR_DUTY_CYCLE = MOTOR_DUTY_CYCLE;
 }
 
 void updateAnalogInputs(){
