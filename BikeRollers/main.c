@@ -37,7 +37,7 @@ uint8_t battVoltageRef_steps;
 uint8_t motorCurrent_steps;	// 128 should be 0 current
 uint8_t controllerTemp_steps;
 
-#define MOTOR_DATA_LENGTH			25
+#define MOTOR_DATA_LENGTH			5
 typedef struct{
 	float motorInstVelocity;
 	float motorVelocity;
@@ -80,7 +80,6 @@ int main(void)
     while(1)
     {
 		updateAnalogInputs();		
-		RESISTOR_DUTY_CYCLE = motorCurrent_steps;
 		
 		/* Functions:
 			- Scan analog inputs 
@@ -92,6 +91,10 @@ int main(void)
 				> Momentum - oppose acceleration
 			- PID loop to control motor torque output
 			- Auto mode to follow preset pattern
+			- Watch battery temperature and controller temperature
+			- Dump excess energy into resistor bank if
+			- Program interval training sequence
+			- External status LEDs
 		*/
     }
 	
@@ -103,14 +106,9 @@ int main(void)
 }
 
 void setPinModes() {
-	pinMode(RESISTOR_FWD, OUTPUT);
-	pinMode(RESISTOR_REV, OUTPUT);
-	pinMode(RESISTOR_PWM, OUTPUT);
-
-	pinMode(MOTOR_FWD, OUTPUT);
-	pinMode(MOTOR_REV, OUTPUT);
-	pinMode(MOTOR_PWM, OUTPUT);
-
+	EICRA = EICRA & 0b11111100 | 0b00000011; // Rising edge triggers an interrupt for INT0
+	EIMSK = EIMSK & 0b11111110 | 0b00000001; // Enable INT0 interrupt	
+	
 	pinMode(BATT_V_REF, INPUT);
 	pinMode(BATT_TEMP, INPUT);
 	pinMode(MOT_I_REF, INPUT);
@@ -121,13 +119,22 @@ void setPinModes() {
 
 	pinMode(SW_AUTO_MAN, INPUT);
 
-	pinMode(EXT_STATUS_LT, OUTPUT);
-	pinMode(EXT_ERROR_LT, OUTPUT);
+	//pinMode(EXT_STATUS_LT, OUTPUT);
+	//pinMode(EXT_ERROR_LT, OUTPUT);
 	
 	pinMode(MOTOR_ENC_A, INPUT);
 	pinMode(MOTOR_ENC_B, INPUT);	
-	EICRA = EICRA & 0b11111100 | 0b00000011; // Rising edge triggers an interrupt for INT0
-	EIMSK = EIMSK & 0b11111110 | 0b00000001; // Enable INT0 interrupt
+	
+	//pinMode(RESISTOR_FWD, OUTPUT);
+	//pinMode(RESISTOR_REV, OUTPUT);
+	//pinMode(RESISTOR_PWM, OUTPUT);
+
+	//pinMode(MOTOR_FWD, OUTPUT);
+	//pinMode(MOTOR_REV, OUTPUT);
+	//pinMode(MOTOR_PWM, OUTPUT);
+	
+	DDRD |= (1 << PIND0) | (1 << PIND1) | (1 << PIND4) | (1 << PIND5) | (1 << PIND6);
+	DDRB |= (1 << PINB0) | (1 << PINB1) | (1 << PINB2);	
 }
 
 void setPwmTimers(){
@@ -152,12 +159,12 @@ void setSampleTimer(){
 }
 
 void sampleInputs(){
-	arrMotorData[motorDataPointer].motorInstVelocity = iEncoderPos / 0.01;
+	arrMotorData[motorDataPointer].motorInstVelocity = iEncoderPos;
 	iEncoderPos = 0;
 	
 	arrMotorData[motorDataPointer].motorVelocity = 0;
 	for (uint8_t i = 0; i < MOTOR_DATA_LENGTH; i++) {
-		arrMotorData[motorDataPointer].motorVelocity += arrMotorData[motorDataPointer].motorInstVelocity;
+		arrMotorData[motorDataPointer].motorVelocity += arrMotorData[i].motorInstVelocity;
 	}
 	arrMotorData[motorDataPointer].motorVelocity /= MOTOR_DATA_LENGTH;
 	
@@ -187,18 +194,20 @@ void getTargetCurrent(){
 	float targetCurrent = 128;
 	
 	// Friction (responds to square of velocity)
-	/*targetCurrent -= arrMotorData[motorDataPointer].motorVelocity 
-			* arrMotorData[motorDataPointer].motorVelocity * potFriction_steps / 1280*/
+	if (arrMotorData[motorDataPointer].motorVelocity < 200) {
+		targetCurrent += arrMotorData[motorDataPointer].motorVelocity
+		* abs(arrMotorData[motorDataPointer].motorVelocity) * potFriction_steps / 1280000;
+	}
 	
 	// Slope (fixed torque)
-	targetCurrent += (potSlope_steps - 128) / 4;
+	targetCurrent += (potSlope_steps - 128) / 2;
 	
 	// Momentum (responds to change in velocity)
-	//targetCurrent -= arrMotorData[motorDataPointer].motorAcceleration * potMomentum_steps / 255;
+	targetCurrent += arrMotorData[motorDataPointer].motorAcceleration * potMomentum_steps * 5;
 	
 	// Check boundaries
-	if (targetCurrent < 0 || arrMotorData[motorDataPointer].motorVelocity == 0) { // don't apply torque if rollers are stationary
-		targetCurrent_steps = 128;
+	if (targetCurrent < 0 ){//|| arrMotorData[motorDataPointer].motorVelocity == 0) { // don't apply torque if rollers are stationary
+		targetCurrent_steps = 0;
 	} else if (targetCurrent > 255) {
 		targetCurrent_steps = 255;
 	} else {
@@ -208,18 +217,14 @@ void getTargetCurrent(){
 
 void updateMotorPID(){
 	float error = targetCurrent_steps - motorCurrent_steps;
-	error *= 0.05;
+	error *= 0.005;
 	
 	motorVoltageControl += error;	
-	if (motorVoltageControl < -127) {
-		motorVoltageControl = -127;
-	} else if (motorVoltageControl > 127) {
-		motorVoltageControl = 127;
+	if (motorVoltageControl < -64) { // TODO: increase to 255 to use full capacity of motor driver
+		motorVoltageControl = -64;
+	} else if (motorVoltageControl > 64) {
+		motorVoltageControl = 64;
 	} 
-	
-	// FOR DEBUGGING*****
-	motorVoltageControl = targetCurrent_steps - 128;
-	// ******************
 	
 	if (motorVoltageControl < 0) {
 		MOTOR_DUTY_CYCLE = -motorVoltageControl;
@@ -231,14 +236,13 @@ void updateMotorPID(){
 		digitalWrite(MOTOR_FWD, 1);
 	} else {
 		MOTOR_DUTY_CYCLE = 0;
-		digitalWrite(MOTOR_REV, 0);
-		digitalWrite(MOTOR_FWD, 0);
+		digitalWrite(MOTOR_REV, 1);
+		digitalWrite(MOTOR_FWD, 1);
 	}
 }
 
 void updateResistorPID(){
 	#warning "Write resistor PID and test resistor outputs"
-	RESISTOR_DUTY_CYCLE = MOTOR_DUTY_CYCLE;
 }
 
 void updateAnalogInputs(){
